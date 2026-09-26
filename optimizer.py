@@ -1,310 +1,522 @@
-"""
-Основной алгоритм оптимизации зарядной инфраструктуры.
-"""
-
-import math
 from dataclasses import dataclass
-from typing import List
+from math import ceil
+
+
+# ============================================================
+# INPUT
+# ============================================================
 
 @dataclass
-class InputData:
-    """
-    Входные параметры модели.
-    """
+class SiteInput:
+    name: str
 
     current_demand: float
-    ev_growth_percent: float
-    fast_charging_share_percent: float
-
-    station_power_kw: float
-    available_grid_power_kw: float
-    simultaneity_factor: float
-
-    station_cost_rub: float
-    grid_upgrade_cost_per_100kw_rub: float
+    annual_growth: float
+    fast_share: float
 
     station_capacity: float
+    station_power_kw: float
+    station_cost: float
+
+    grid_power_kw: float
+    simultaneity: float
+    grid_upgrade_cost_per_100kw: float
+
+    annual_revenue_per_station: float
+    annual_opex_per_station: float
+
+    accessibility_score: float = 80.0
+
+
+# ============================================================
+# YEAR RESULT
+# ============================================================
 
 @dataclass
-class ScenarioResult:
-    """
-    Результат расчёта одного сценария.
-    """
-
+class YearResult:
+    year: int
+    demand: float
     stations: int
-
-    current_demand: float
-    future_demand: float
-    fast_demand: float
-
-    station_capacity_total: float
-
+    utilization: float
     installed_power_kw: float
     effective_power_kw: float
+    grid_reserve_kw: float
 
-    available_grid_power_kw: float
-    power_deficit_kw: float
-    power_reserve_kw: float
 
-    station_cost_rub: float
-    grid_upgrade_cost_rub: float
-    total_cost_rub: float
+# ============================================================
+# FINAL RESULT
+# ============================================================
 
-    utilization_percent: float
+@dataclass
+class SiteResult:
+    name: str
 
-    demand_ok: bool
-    grid_ok: bool
-    feasible: bool
+    years: list
 
-def calculate_future_demand(
-    current_demand: float,
-    growth_percent: float
-) -> float:
-    """
-    Прогнозирует будущий спрос.
+    capex: float
+    total_capex: float
+    total_investment: float
 
-    Например:
-    1000 + 30% = 1300
-    """
+    annual_opex: float
+    annual_revenue: float
+    annual_cash_flow: float
+    payback_years: float
 
-    return current_demand * (1 + growth_percent / 100)
+    grid_upgrade_required: bool
+    grid_upgrade_cost: float
+
+    demand_score: float
+    grid_score: float
+    economics_score: float
+    accessibility_score: float
+
+    total_score: float
+    verdict: str
+
+
+# ============================================================
+# DEMAND
+# ============================================================
+
+def calculate_demand(
+    current_demand,
+    growth,
+    years
+):
+    return current_demand * (
+        (1 + growth / 100) ** years
+    )
+
 
 def calculate_fast_demand(
-    future_demand: float,
-    fast_charging_share_percent: float
-) -> float:
-    """
-    Определяет спрос, который должен покрываться
-    быстрой зарядной инфраструктурой.
-    """
+    total_demand,
+    fast_share
+):
+    return total_demand * fast_share / 100
 
-    return future_demand * fast_charging_share_percent / 100
 
-def calculate_required_stations(
-    fast_demand: float,
-    station_capacity: float
-) -> int:
-    """
-    Рассчитывает минимальное количество станций,
-    необходимое для покрытия спроса.
-    """
+# ============================================================
+# STATIONS
+# ============================================================
 
-    if station_capacity <= 0:
-        raise ValueError("Производительность станции должна быть больше 0.")
+def calculate_stations(
+    demand,
+    station_capacity
+):
+    return max(
+        1,
+        ceil(demand / station_capacity)
+    )
 
-    return max(1, math.ceil(fast_demand / station_capacity))
 
-def calculate_scenario(
-    data: InputData,
-    stations: int
-) -> ScenarioResult:
-    """
-    Рассчитывает один вариант количества станций.
-    """
+# ============================================================
+# YEAR CALCULATION
+# ============================================================
 
-    if stations <= 0:
-        raise ValueError("Количество станций должно быть больше 0.")
+def calculate_year(
+    site: SiteInput,
+    year: int
+):
 
-    future_demand = calculate_future_demand(
-        data.current_demand,
-        data.ev_growth_percent
+    total_demand = calculate_demand(
+        site.current_demand,
+        site.annual_growth,
+        year
     )
 
     fast_demand = calculate_fast_demand(
-        future_demand,
-        data.fast_charging_share_percent
+        total_demand,
+        site.fast_share
     )
 
-    station_capacity_total = stations * data.station_capacity
-
-    # Реальная установленная мощность
-    installed_power_kw = stations * data.station_power_kw
-
-    # Учитываем одновременность работы станций
-    effective_power_kw = (
-        installed_power_kw * data.simultaneity_factor
+    stations = calculate_stations(
+        fast_demand,
+        site.station_capacity
     )
 
-    # Проверяем, хватает ли мощности сети
-    power_deficit_kw = max(
-        0,
-        effective_power_kw - data.available_grid_power_kw
+    installed_power = (
+        stations *
+        site.station_power_kw
     )
 
-    power_reserve_kw = max(
-        0,
-        data.available_grid_power_kw - effective_power_kw
+    effective_power = (
+        installed_power *
+        site.simultaneity
     )
 
-    # Стоимость самих станций
-    station_cost_rub = (
-        stations * data.station_cost_rub
+    grid_reserve = (
+        site.grid_power_kw -
+        effective_power
     )
 
-    # Если мощности не хватает,
-    # считаем стоимость усиления сети.
-    grid_upgrade_cost_rub = (
-        math.ceil(power_deficit_kw / 100)
-        * data.grid_upgrade_cost_per_100kw_rub
-        if power_deficit_kw > 0
-        else 0
-    )
+    utilization = (
+        fast_demand /
+        (stations * site.station_capacity)
+    ) * 100
 
-    total_cost_rub = (
-        station_cost_rub
-        + grid_upgrade_cost_rub
-    )
-
-    # Загрузка станций.
-    #
-    # Если мощность станций позволяет покрыть спрос,
-    # загрузка определяется отношением спроса
-    # к общей пропускной способности.
-    if station_capacity_total > 0:
-        utilization_percent = min(
-            100,
-            fast_demand / station_capacity_total * 100
-        )
-    else:
-        utilization_percent = 100
-
-    demand_ok = (
-        station_capacity_total >= fast_demand
-    )
-
-    grid_ok = (
-        effective_power_kw <= data.available_grid_power_kw
-    )
-
-    feasible = demand_ok and grid_ok
-
-    return ScenarioResult(
+    return YearResult(
+        year=year,
+        demand=fast_demand,
         stations=stations,
-
-        current_demand=data.current_demand,
-        future_demand=future_demand,
-        fast_demand=fast_demand,
-
-        station_capacity_total=station_capacity_total,
-
-        installed_power_kw=installed_power_kw,
-        effective_power_kw=effective_power_kw,
-
-        available_grid_power_kw=data.available_grid_power_kw,
-        power_deficit_kw=power_deficit_kw,
-        power_reserve_kw=power_reserve_kw,
-
-        station_cost_rub=station_cost_rub,
-        grid_upgrade_cost_rub=grid_upgrade_cost_rub,
-        total_cost_rub=total_cost_rub,
-
-        utilization_percent=utilization_percent,
-
-        demand_ok=demand_ok,
-        grid_ok=grid_ok,
-        feasible=feasible,
+        utilization=utilization,
+        installed_power_kw=installed_power,
+        effective_power_kw=effective_power,
+        grid_reserve_kw=grid_reserve
     )
 
-def optimize(
-    data: InputData,
-    max_stations: int = 50
-) -> List[ScenarioResult]:
-    """
-    Перебирает разные варианты количества станций.
 
-    Например:
-    1 станция
-    2 станции
-    3 станции
-    ...
-    50 станций
+# ============================================================
+# GRID
+# ============================================================
 
-    Для каждого варианта выполняется полный расчёт.
-    """
-
-    results = []
-
-    for stations in range(1, max_stations + 1):
-
-        result = calculate_scenario(
-            data,
-            stations
-        )
-
-        results.append(result)
-
-    return results
-
-def find_minimum_feasible(
-    results: List[ScenarioResult]
+def calculate_grid_upgrade(
+    site: SiteInput,
+    year_result: YearResult
 ):
-    """
-    Возвращает первый вариант,
-    который одновременно:
 
-    1. покрывает спрос;
-    2. не превышает доступную мощность сети.
-    """
-
-    for result in results:
-
-        if result.feasible:
-            return result
-
-    return None
-
-def calculate_growth_scenario(
-    data: InputData,
-    additional_growth_percent: float
-):
-    """
-    Создаёт дополнительный сценарий развития.
-
-    Например:
-    основной рост = 30%
-    дополнительный сценарий = +50%
-
-    Тогда рост становится 80%.
-    """
-
-    scenario_data = InputData(
-        current_demand=data.current_demand,
-
-        ev_growth_percent=(
-            data.ev_growth_percent
-            + additional_growth_percent
-        ),
-
-        fast_charging_share_percent=(
-            data.fast_charging_share_percent
-        ),
-
-        station_power_kw=data.station_power_kw,
-
-        available_grid_power_kw=(
-            data.available_grid_power_kw
-        ),
-
-        simultaneity_factor=(
-            data.simultaneity_factor
-        ),
-
-        station_cost_rub=(
-            data.station_cost_rub
-        ),
-
-        grid_upgrade_cost_per_100kw_rub=(
-            data.grid_upgrade_cost_per_100kw_rub
-        ),
-
-        station_capacity=(
-            data.station_capacity
-        ),
+    deficit = max(
+        0,
+        year_result.effective_power_kw -
+        site.grid_power_kw
     )
 
-    results = optimize(scenario_data)
+    if deficit <= 0:
+        return False, 0
+
+    blocks = ceil(
+        deficit / 100
+    )
 
     return (
-        scenario_data,
-        find_minimum_feasible(results)
+        True,
+        blocks *
+        site.grid_upgrade_cost_per_100kw
     )
+
+
+# ============================================================
+# ECONOMICS
+# ============================================================
+
+def calculate_economics(
+    site: SiteInput,
+    year_result: YearResult,
+    grid_upgrade_cost: float = 0
+):
+
+    stations = year_result.stations
+
+    # Стоимость зарядных станций
+    capex = (
+        stations *
+        site.station_cost
+    )
+
+    # Стоимость модернизации сети
+    total_investment = (
+        capex +
+        grid_upgrade_cost
+    )
+
+    # Годовая выручка
+    annual_revenue = (
+        stations *
+        site.annual_revenue_per_station
+    )
+
+    # Годовые расходы
+    annual_opex = (
+        stations *
+        site.annual_opex_per_station
+    )
+
+    # Денежный поток
+    annual_cash_flow = (
+        annual_revenue -
+        annual_opex
+    )
+
+    # Окупаемость
+    if annual_cash_flow > 0:
+
+        payback = (
+            total_investment /
+            annual_cash_flow
+        )
+
+    else:
+
+        payback = float("inf")
+
+    return (
+        capex,
+        total_investment,
+        annual_revenue,
+        annual_opex,
+        annual_cash_flow,
+        payback
+    )
+
+
+# ============================================================
+# SCORE
+# ============================================================
+
+def calculate_scores(
+    site: SiteInput,
+    years,
+    payback
+):
+
+    year_3 = years[3]
+
+    # ----------------------------------------
+    # Demand
+    # ----------------------------------------
+
+    demand_score = min(
+        100,
+        year_3.utilization /
+        90 *
+        100
+    )
+
+    # ----------------------------------------
+    # Grid
+    # ----------------------------------------
+
+    if year_3.grid_reserve_kw >= 0:
+
+        grid_score = 100
+
+    else:
+
+        grid_score = max(
+            0,
+            100 +
+            (
+                year_3.grid_reserve_kw /
+                site.grid_power_kw *
+                100
+            )
+        )
+
+    # ----------------------------------------
+    # Economics
+    # ----------------------------------------
+
+    if payback <= 3:
+
+        economics_score = 100
+
+    elif payback <= 5:
+
+        economics_score = 85
+
+    elif payback <= 6:
+
+        economics_score = 70
+
+    elif payback <= 8:
+
+        economics_score = 50
+
+    else:
+
+        economics_score = 20
+
+    # ----------------------------------------
+    # Final score
+    # ----------------------------------------
+
+    total_score = (
+        demand_score * 0.40 +
+        grid_score * 0.25 +
+        economics_score * 0.20 +
+        site.accessibility_score * 0.15
+    )
+
+    return (
+        demand_score,
+        grid_score,
+        economics_score,
+        site.accessibility_score,
+        total_score
+    )
+
+
+# ============================================================
+# VERDICT
+# ============================================================
+
+def calculate_verdict(
+    total_score,
+    payback,
+    year_3,
+    grid_upgrade_required
+):
+
+    if grid_upgrade_required:
+
+        return "GRID UPGRADE"
+
+    if (
+        total_score >= 70
+        and payback <= 6
+        and year_3.utilization <= 90
+    ):
+
+        return "BUILD"
+
+    return "DON'T BUILD"
+
+
+# ============================================================
+# MAIN OPTIMIZER
+# ============================================================
+
+def optimize_site(
+    site: SiteInput
+):
+
+    years = [
+        calculate_year(
+            site,
+            year
+        )
+        for year in range(4)
+    ]
+
+    year_3 = years[3]
+
+    (
+        grid_upgrade_required,
+        grid_upgrade_cost
+    ) = calculate_grid_upgrade(
+        site,
+        year_3
+    )
+
+    (
+        capex,
+        total_investment,
+        annual_revenue,
+        annual_opex,
+        annual_cash_flow,
+        payback
+    ) = calculate_economics(
+        site,
+        years[0],
+        grid_upgrade_cost
+    )
+
+    (
+        demand_score,
+        grid_score,
+        economics_score,
+        accessibility_score,
+        total_score
+    ) = calculate_scores(
+        site,
+        years,
+        payback
+    )
+
+    verdict = calculate_verdict(
+        total_score,
+        payback,
+        year_3,
+        grid_upgrade_required
+    )
+
+    return SiteResult(
+        name=site.name,
+        years=years,
+
+        capex=capex,
+        total_capex=capex,
+        total_investment=total_investment,
+
+        annual_opex=annual_opex,
+        annual_revenue=annual_revenue,
+        annual_cash_flow=annual_cash_flow,
+        payback_years=payback,
+
+        grid_upgrade_required=
+            grid_upgrade_required,
+
+        grid_upgrade_cost=
+            grid_upgrade_cost,
+
+        demand_score=demand_score,
+        grid_score=grid_score,
+        economics_score=economics_score,
+        accessibility_score=
+            accessibility_score,
+
+        total_score=total_score,
+        verdict=verdict
+    )
+
+
+# ============================================================
+# AUTOMATIC CANDIDATE GENERATION
+# ============================================================
+
+def generate_candidates(
+    heatmap_df,
+    n_candidates=10,
+    min_distance=0.008
+):
+
+    points = (
+        heatmap_df
+        .sort_values(
+            "demand",
+            ascending=False
+        )
+        .reset_index(drop=True)
+    )
+
+    selected = []
+
+    for _, point in points.iterrows():
+
+        lat = point["lat"]
+        lon = point["lon"]
+
+        too_close = False
+
+        for candidate in selected:
+
+            distance = (
+                (
+                    lat -
+                    candidate["lat"]
+                ) ** 2
+                +
+                (
+                    lon -
+                    candidate["lon"]
+                ) ** 2
+            ) ** 0.5
+
+            if distance < min_distance:
+
+                too_close = True
+                break
+
+        if too_close:
+            continue
+
+        selected.append({
+            "lat": lat,
+            "lon": lon,
+            "demand": point["demand"]
+        })
+
+        if len(selected) >= n_candidates:
+
+            break
+
+    return selected

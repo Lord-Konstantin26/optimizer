@@ -1,532 +1,975 @@
-"""
-Интерактивный интерфейс Charge Optimizer.
-"""
-
 import streamlit as st
-
-from config import (
-    DEFAULT_CURRENT_DEMAND,
-    DEFAULT_EV_GROWTH,
-    DEFAULT_FAST_CHARGING_SHARE,
-    DEFAULT_STATION_POWER,
-    DEFAULT_GRID_POWER,
-    DEFAULT_SIMULTANEITY,
-    DEFAULT_STATION_COST,
-    DEFAULT_GRID_UPGRADE_COST_PER_100KW,
-    DEFAULT_STATION_CAPACITY,
-    DEFAULT_SCENARIO_GROWTH,
-    MAX_STATIONS_TO_CHECK,
-)
+import pandas as pd
+import numpy as np
+import pydeck as pdk
 
 from optimizer import (
-    InputData,
-    optimize,
-    find_minimum_feasible,
-    calculate_growth_scenario,
+    SiteInput,
+    optimize_site,
+    generate_candidates
 )
 
-# --------------------------------------------------
-# Настройки страницы
-# --------------------------------------------------
+
+# ============================================================
+# PAGE
+# ============================================================
 
 st.set_page_config(
-    page_title="Charge Optimizer",
+    page_title="EV Charging Optimizer",
     page_icon="⚡",
-    layout="wide",
+    layout="wide"
 )
 
-# --------------------------------------------------
-# Заголовок
-# --------------------------------------------------
 
-st.title("⚡ Charge Optimizer")
-
-st.markdown(
-    """
-    ### Оптимизация зарядной инфраструктуры
-
-    Модель рассчитывает необходимое количество зарядных станций
-    с учётом прогнозируемого спроса и ограничений электросети.
-    """
+st.title(
+    "⚡ Оптимизация размещения зарядных станций"
 )
 
-# --------------------------------------------------
-# Боковая панель
-# --------------------------------------------------
+st.caption(
+    "Демонстрационный прототип пространственно-"
+    "экономической оптимизации зарядной инфраструктуры"
+)
 
-st.sidebar.header("Исходные данные")
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.header(
+    "Параметры модели"
+)
+
 
 current_demand = st.sidebar.number_input(
-    "Текущий спрос",
+    "Текущий спрос, ед./сутки",
     min_value=1.0,
-    value=float(DEFAULT_CURRENT_DEMAND),
-    step=100.0,
+    value=100.0
 )
 
-ev_growth = st.sidebar.number_input(
-    "Рост EV, %",
-    min_value=0.0,
-    max_value=500.0,
-    value=float(DEFAULT_EV_GROWTH),
-    step=5.0,
-)
 
-fast_share = st.sidebar.number_input(
-    "Доля быстрого заряда, %",
+annual_growth = st.sidebar.number_input(
+    "Рост спроса, % в год",
     min_value=0.0,
     max_value=100.0,
-    value=float(DEFAULT_FAST_CHARGING_SHARE),
-    step=5.0,
+    value=20.0
 )
 
-st.sidebar.divider()
 
-st.sidebar.subheader("Энергосистема")
+fast_share = st.sidebar.number_input(
+    "Доля быстрой зарядки, %",
+    min_value=0.0,
+    max_value=100.0,
+    value=60.0
+)
+
+
+station_capacity = st.sidebar.number_input(
+    "Ёмкость станции, ед./сутки",
+    min_value=1.0,
+    value=100.0
+)
+
 
 station_power = st.sidebar.number_input(
-    "Мощность одной станции, кВт",
+    "Мощность станции, кВт",
     min_value=1.0,
-    value=float(DEFAULT_STATION_POWER),
-    step=10.0,
+    value=150.0
 )
+
 
 grid_power = st.sidebar.number_input(
     "Доступная мощность сети, кВт",
-    min_value=1.0,
-    value=float(DEFAULT_GRID_POWER),
-    step=100.0,
+    min_value=0.0,
+    value=1000.0
 )
 
-simultaneity = st.sidebar.slider(
+
+simultaneity = st.sidebar.number_input(
     "Коэффициент одновременности",
     min_value=0.1,
     max_value=1.0,
-    value=float(DEFAULT_SIMULTANEITY),
-    step=0.05,
+    value=0.7,
+    step=0.05
 )
 
-st.sidebar.divider()
-
-st.sidebar.subheader("Экономика")
 
 station_cost = st.sidebar.number_input(
-    "Стоимость одной станции, ₽",
+    "Стоимость станции, ₽",
     min_value=0.0,
-    value=float(DEFAULT_STATION_COST),
-    step=500_000.0,
+    value=5_000_000.0,
+    step=100_000.0
 )
+
 
 grid_upgrade_cost = st.sidebar.number_input(
-    "Усиление сети: стоимость 100 кВт, ₽",
+    "Модернизация сети / 100 кВт, ₽",
     min_value=0.0,
-    value=float(DEFAULT_GRID_UPGRADE_COST_PER_100KW),
-    step=500_000.0,
+    value=1_000_000.0,
+    step=100_000.0
 )
 
-station_capacity = st.sidebar.number_input(
-    "Пропускная способность станции",
-    min_value=1.0,
-    value=float(DEFAULT_STATION_CAPACITY),
-    step=10.0,
-)
 
 st.sidebar.divider()
 
-scenario_growth = st.sidebar.number_input(
-    "Дополнительный рост для сценария, %",
+
+st.sidebar.header(
+    "Экономика"
+)
+
+
+annual_revenue = st.sidebar.number_input(
+    "Доход на станцию / год, ₽",
     min_value=0.0,
-    max_value=500.0,
-    value=float(DEFAULT_SCENARIO_GROWTH),
-    step=5.0,
+    value=3_000_000.0,
+    step=100_000.0
 )
 
-# --------------------------------------------------
-# Формируем данные
-# --------------------------------------------------
 
-data = InputData(
-    current_demand=current_demand,
-
-    ev_growth_percent=ev_growth,
-
-    fast_charging_share_percent=fast_share,
-
-    station_power_kw=station_power,
-
-    available_grid_power_kw=grid_power,
-
-    simultaneity_factor=simultaneity,
-
-    station_cost_rub=station_cost,
-
-    grid_upgrade_cost_per_100kw_rub=(
-        grid_upgrade_cost
-    ),
-
-    station_capacity=station_capacity,
+annual_opex = st.sidebar.number_input(
+    "OPEX на станцию / год, ₽",
+    min_value=0.0,
+    value=1_000_000.0,
+    step=100_000.0
 )
 
-# --------------------------------------------------
-# Кнопка расчёта
-# --------------------------------------------------
 
-calculate_button = st.button(
-    "🚀 Рассчитать",
-    type="primary",
-    use_container_width=True,
+number_of_candidates = st.sidebar.slider(
+    "Количество кандидатов",
+    min_value=5,
+    max_value=20,
+    value=10
 )
 
-# --------------------------------------------------
-# Расчёт
-# --------------------------------------------------
 
-if calculate_button:
+# ============================================================
+# HEATMAP DATA
+# ============================================================
 
-    results = optimize(
-        data,
-        max_stations=MAX_STATIONS_TO_CHECK,
+demand_centers = [
+
+    {
+        "lat": 55.7558,
+        "lon": 37.6176,
+        "intensity": 1.00,
+        "radius": 0.015
+    },
+
+    {
+        "lat": 55.7415,
+        "lon": 37.6260,
+        "intensity": 0.75,
+        "radius": 0.012
+    },
+
+    {
+        "lat": 55.7690,
+        "lon": 37.5950,
+        "intensity": 1.25,
+        "radius": 0.018
+    }
+]
+
+# ============================================================
+# DEMO GRID / SUBSTATIONS
+# ============================================================
+
+substations = [
+    {
+        "name": "ПС-01",
+        "lat": 55.7558,
+        "lon": 37.6176,
+        "capacity_kw": 1200,
+    },
+    {
+        "name": "ПС-02",
+        "lat": 55.7415,
+        "lon": 37.6260,
+        "capacity_kw": 500,
+    },
+    {
+        "name": "ПС-03",
+        "lat": 55.7690,
+        "lon": 37.5950,
+        "capacity_kw": 800,
+    },
+    {
+        "name": "ПС-04",
+        "lat": 55.7800,
+        "lon": 37.6500,
+        "capacity_kw": 600,
+    },
+    {
+        "name": "ПС-05",
+        "lat": 55.7200,
+        "lon": 37.5900,
+        "capacity_kw": 1000,
+    },
+]
+
+lat_values = np.linspace(
+    55.69,
+    55.82,
+    70
 )
 
-    optimal = find_minimum_feasible(results)
 
-    # ----------------------------------------------
-    # Верхние показатели
-    # ----------------------------------------------
+lon_values = np.linspace(
+    37.52,
+    37.72,
+    90
+)
 
-    future_demand = (
-        current_demand
-        * (1 + ev_growth / 100)
-    )
 
-    fast_demand = (
-        future_demand
-        * fast_share
-        / 100
-    )
+heatmap_points = []
 
-    st.subheader("Основной результат")
 
-    col1, col2, col3, col4 = st.columns(4)
+for lat in lat_values:
 
-    col1.metric(
-        "Прогноз спроса",
-        f"{future_demand:,.0f}",
-    )
+    for lon in lon_values:
 
-    col2.metric(
-        "Спрос на быстрый заряд",
-        f"{fast_demand:,.0f}",
-    )
+        demand = 0.0
 
-    if optimal:
+        for center in demand_centers:
 
-        col3.metric(
-            "Необходимое количество станций",
-            optimal.stations,
-        )
-
-        col4.metric(
-            "Общая стоимость",
-            f"{optimal.total_cost_rub / 1_000_000:.1f} млн ₽",
-        )
-
-    else:
-
-        col3.metric(
-            "Необходимое количество станций",
-            "Нет решения",
-        )
-
-        col4.metric(
-            "Общая стоимость",
-            "—",
-        )
-
-    # ----------------------------------------------
-    # Подробный результат
-    # ----------------------------------------------
-
-    if optimal:
-
-        st.divider()
-
-        st.subheader("Проверка выбранного варианта")
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            st.write("### ⚡ Электросеть")
-
-            st.write(
-                f"Установленная мощность: "
-                f"**{optimal.installed_power_kw:,.0f} кВт**"
+            distance = (
+                (lat - center["lat"]) ** 2
+                +
+                (lon - center["lon"]) ** 2
             )
 
-            st.write(
-                f"Расчётная мощность с учётом "
-                f"одновременности: "
-                f"**{optimal.effective_power_kw:,.0f} кВт**"
-            )
-
-            st.write(
-                f"Доступная мощность: "
-                f"**{optimal.available_grid_power_kw:,.0f} кВт**"
-            )
-
-            if optimal.grid_ok:
-
-                st.success(
-                    f"Мощности достаточно. "
-                    f"Запас: {optimal.power_reserve_kw:,.0f} кВт."
+            influence = np.exp(
+                -distance /
+                (
+                    center["radius"] ** 2
                 )
-
-            else:
-
-                st.error(
-                    f"Недостаток мощности: "
-                    f"{optimal.power_deficit_kw:,.0f} кВт."
-                )
-
-        with c2:
-
-            st.write("### 📊 Спрос")
-
-            st.write(
-                f"Пропускная способность: "
-                f"**{optimal.station_capacity_total:,.0f}**"
             )
 
-            st.write(
-                f"Прогнозируемый спрос: "
-                f"**{optimal.fast_demand:,.0f}**"
+            demand += (
+                influence *
+                center["intensity"]
             )
 
-            st.write(
-                f"Расчётная загрузка: "
-                f"**{optimal.utilization_percent:.1f}%**"
-            )
+        heatmap_points.append({
 
-            if optimal.demand_ok:
+            "lat": lat,
 
-                st.success(
-                    "Спрос полностью покрывается."
-                )
+            "lon": lon,
 
-            else:
+            "demand": demand
 
-                st.error(
-                    "Пропускной способности недостаточно."
-                )
+        })
 
-        # ------------------------------------------
-        # Экономика
-        # ------------------------------------------
 
-        st.divider()
+heatmap_df = pd.DataFrame(
+    heatmap_points
+)
 
-        st.subheader("💰 Экономика")
+def find_nearest_substation(
+    lat,
+    lon,
+    substations
+):
 
-        e1, e2, e3 = st.columns(3)
+    nearest = None
+    min_distance = float("inf")
 
-        e1.metric(
-            "Станции",
-            f"{optimal.station_cost_rub / 1_000_000:.1f} млн ₽",
-        )
+    for substation in substations:
 
-        e2.metric(
-            "Усиление сети",
-            f"{optimal.grid_upgrade_cost_rub / 1_000_000:.1f} млн ₽",
-        )
+        distance = (
+            (lat - substation["lat"]) ** 2
+            +
+            (lon - substation["lon"]) ** 2
+        ) ** 0.5
 
-        e3.metric(
-            "Итого",
-            f"{optimal.total_cost_rub / 1_000_000:.1f} млн ₽",
-        )
+        if distance < min_distance:
 
-        # ------------------------------------------
-        # Статус
-        # ------------------------------------------
+            min_distance = distance
+            nearest = substation
 
-        st.divider()
+    return nearest, min_distance
 
-        if optimal.feasible:
+# ============================================================
+# AUTOMATIC CANDIDATES
+# ============================================================
 
-            st.success(
-                f"✓ Найден допустимый вариант: "
-                f"{optimal.stations} станций."
-            )
+candidate_points = generate_candidates(
 
-        else:
+    heatmap_df,
 
-            st.warning(
-                "Не найден вариант, который одновременно "
-                "покрывает спрос и укладывается в ограничения сети."
-            )
-# ------------------------------------------
-        # Таблица всех вариантов
-        # ------------------------------------------
+    n_candidates=
+        number_of_candidates,
 
-        st.divider()
+    min_distance=0.008
+)
 
-        st.subheader(
-            "🔎 Проверенные варианты"
-        )
 
-        table_data = []
+max_demand = max(
+    point["demand"]
+    for point in candidate_points
+)
 
-        for result in results:
 
-            table_data.append(
-                {
-                    "Станции": result.stations,
+sites_data = []
 
-                    "Загрузка, %": round(
-                        result.utilization_percent,
-                        1,
-                    ),
+for i, point in enumerate(candidate_points):
 
-                    "Мощность, кВт": round(
-                        result.effective_power_kw,
-                        1,
-                    ),
-
-                    "Запас сети, кВт": round(
-                        result.power_reserve_kw,
-                        1,
-                    ),
-
-                    "Дефицит, кВт": round(
-                        result.power_deficit_kw,
-                        1,
-                    ),
-
-                    "Стоимость, млн ₽": round(
-                        result.total_cost_rub / 1_000_000,
-                        2,
-                    ),
-
-                    "Спрос": (
-                        "✓"
-                        if result.demand_ok
-                        else "✗"
-                    ),
-
-                    "Сеть": (
-                        "✓"
-                        if result.grid_ok
-                        else "✗"
-                    ),
-
-                    "Допустим": (
-                        "✓"
-                        if result.feasible
-                        else "✗"
-                    ),
-                }
-            )
-
-        st.dataframe(
-            table_data,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    else:
-
-        st.error(
-            "В заданном диапазоне невозможно найти "
-            "вариант, который удовлетворяет ограничениям."
-        )
-
-    # --------------------------------------------------
-    # Сценарный анализ
-    # --------------------------------------------------
-
-    st.divider()
-
-    st.subheader(
-        "📈 Сценарный анализ"
+    demand_multiplier = (
+        point["demand"] / max_demand
     )
 
-    st.write(
-        f"Что произойдёт, если рынок вырастет "
-        f"ещё на **{scenario_growth:.0f}%**?"
+    accessibility = (
+        60 +
+        40 * demand_multiplier
     )
 
-    scenario_data, scenario_result = (
-        calculate_growth_scenario(
-            data,
-            scenario_growth,
+    nearest_substation, distance = (
+        find_nearest_substation(
+            point["lat"],
+            point["lon"],
+            substations
         )
     )
 
-    if scenario_result:
+    sites_data.append({
 
-        s1, s2, s3, s4 = st.columns(4)
+        "name":
+            f"Кандидат {i + 1}",
 
-        s1.metric(
-            "Рост EV",
-            f"{scenario_data.ev_growth_percent:.0f}%",
-        )
+        "lat":
+            point["lat"],
 
-        s2.metric(
-            "Станции",
-            scenario_result.stations,
-        )
+        "lon":
+            point["lon"],
 
-        s3.metric(
-            "Загрузка",
-            f"{scenario_result.utilization_percent:.1f}%",
-        )
+        "demand_multiplier":
+            demand_multiplier,
 
-        s4.metric(
-            "Стоимость",
-            f"{scenario_result.total_cost_rub / 1_000_000:.1f} млн ₽",
-        )
+        "accessibility":
+            accessibility,
 
-        if scenario_result.feasible:
+        "substation":
+            nearest_substation["name"],
 
-            st.success(
-                "✓ Инфраструктура сохраняет работоспособность "
-                "при заданном сценарии роста."
-            )
+        "grid_capacity":
+            nearest_substation["capacity_kw"],
 
-        else:
+        "substation_distance":
+            distance
+    })
 
-            st.warning(
-                "⚠ При данном сценарии требуется "
-                "изменение инфраструктуры."
-            )
 
-    else:
+# ============================================================
+# OPTIMIZATION
+# ============================================================
 
-        st.error(
-            "При заданном сценарии не удалось "
-            "найти допустимое решение."
-        )
+results = []
+
+
+for site_data in sites_data:
+
+    site_demand = (
+        current_demand *
+        site_data["demand_multiplier"]
+    )
+
+
+    site = SiteInput(
+
+        name=
+            site_data["name"],
+
+        current_demand=
+            site_demand,
+
+        annual_growth=
+            annual_growth,
+
+        fast_share=
+            fast_share,
+
+        station_capacity=
+            station_capacity,
+
+        station_power_kw=
+            station_power,
+
+        station_cost=
+            station_cost,
+
+        grid_power_kw=
+            site_data["grid_capacity"],
+
+        simultaneity=
+            simultaneity,
+
+        grid_upgrade_cost_per_100kw=
+            grid_upgrade_cost,
+
+        annual_revenue_per_station=
+            annual_revenue,
+
+        annual_opex_per_station=
+            annual_opex,
+
+        accessibility_score=
+            site_data["accessibility"]
+    )
+
+
+    result = optimize_site(
+        site
+    )
+
+
+    results.append(
+        result
+    )
+
+
+# ============================================================
+# KPI
+# ============================================================
+
+st.header(
+    "Результат оптимизации"
+)
+
+
+col1, col2, col3, col4 = st.columns(4)
+
+
+col1.metric(
+    "Кандидатов",
+    len(results)
+)
+
+
+col2.metric(
+    "BUILD",
+    sum(
+        r.verdict == "BUILD"
+        for r in results
+    )
+)
+
+
+col3.metric(
+    "Средний Score",
+    f"{sum(r.total_score for r in results) / len(results):.1f}"
+)
+
+
+valid_paybacks = [
+    r.payback_years
+    for r in results
+    if r.payback_years != float("inf")
+]
+
+
+if valid_paybacks:
+
+    average_payback = (
+        sum(valid_paybacks) /
+        len(valid_paybacks)
+    )
 
 else:
 
-    # --------------------------------------------------
-    # Экран до первого расчёта
-    # --------------------------------------------------
+    average_payback = 0
 
-    st.info(
-        "Измените параметры слева и нажмите "
-        "«Рассчитать»."
-    )
 
-    st.markdown(
+col4.metric(
+    "Средний Payback",
+    f"{average_payback:.1f} лет"
+)
+
+
+# ============================================================
+# HEATMAP + CANDIDATES
+# ============================================================
+
+st.header(
+    "🔥 Тепловая карта транспортного спроса"
+)
+
+
+candidate_map_data = []
+
+
+for site_data, result in zip(
+    sites_data,
+    results
+):
+
+    candidate_map_data.append({
+
+        "lat":
+            site_data["lat"],
+
+        "lon":
+            site_data["lon"],
+
+        "name":
+            result.name,
+
+        "score":
+            round(
+                result.total_score,
+                1
+            ),
+
+        "verdict":
+            result.verdict,
+
+        "grid_capacity":
+            site_data["grid_capacity"],
+
+        "substation":
+            site_data["substation"]
+    })
+
+
+candidate_df = pd.DataFrame(
+    candidate_map_data
+)
+
+
+# Heatmap
+heatmap_layer = pdk.Layer(
+
+    "HeatmapLayer",
+
+    data=heatmap_df,
+
+    get_position=
+        "[lon, lat]",
+
+    get_weight=
+        "demand",
+
+    radius_pixels=45,
+
+    intensity=1.5,
+
+    threshold=0.03
+)
+
+
+# Candidate points
+candidate_layer = pdk.Layer(
+
+    "ScatterplotLayer",
+
+    data=candidate_df,
+
+    get_position=
+        "[lon, lat]",
+
+    get_radius=450,
+
+    get_fill_color=
+        "[255, 255, 255, 255]",
+
+    get_line_color=
+        "[0, 0, 0, 255]",
+
+    line_width_min_pixels=2,
+
+    pickable=True
+)
+
+substation_df = pd.DataFrame(
+    substations
+)
+
+substation_layer = pdk.Layer(
+
+    "ScatterplotLayer",
+
+    data=substation_df,
+
+    get_position="[lon, lat]",
+
+    get_radius=300,
+
+    get_fill_color=
+        "[50, 150, 255, 220]",
+
+    get_line_color=
+        "[255, 255, 255, 255]",
+
+    line_width_min_pixels=2,
+
+    pickable=True
+)
+
+view_state = pdk.ViewState(
+
+    latitude=55.7558,
+
+    longitude=37.6176,
+
+    zoom=10.5,
+
+    pitch=0
+)
+
+
+deck = pdk.Deck(
+
+    layers=[
+        heatmap_layer,
+        candidate_layer,
+        substation_layer
+    ],
+
+    initial_view_state=
+        view_state,
+
+    tooltip={
+
+        "html": """
+        <b>{name}</b><br/>
+        Score: {score}<br/>
+        Статус: {verdict}
         """
-        ### Что умеет модель
+    }
+)
 
-        1. Прогнозирует будущий спрос.
-        2. Определяет спрос на быстрый заряд.
-        3. Перебирает разные варианты количества станций.
-        4. Проверяет ограничения электросети.
-        5. Рассчитывает стоимость.
-        6. Находит допустимый вариант.
-        7. Позволяет проверить дополнительный сценарий роста.
-        """
-    )
+
+st.pydeck_chart(
+    deck,
+    use_container_width=True
+)
+
+
+st.caption(
+    "🔥 Тепловой слой показывает модельный "
+    "уровень спроса. Белые точки — автоматически "
+    "найденные кандидатные площадки."
+)
+
+
+# ============================================================
+# TABLE
+# ============================================================
+
+st.header(
+    "Кандидатные площадки"
+)
+
+
+table = []
+
+for site_data, result in zip(
+    sites_data,
+    results
+):
+
+    year_1 = result.years[1]
+    year_2 = result.years[2]
+    year_3 = result.years[3]
+
+    table.append({
+
+        "Площадка":
+            result.name,
+
+        "Подстанция":
+            site_data["substation"],
+
+        "Сеть":
+            f"{site_data['grid_capacity']:.0f} кВт",
+
+        "Score":
+            round(
+                result.total_score,
+                1
+            ),
+
+        "Сейчас":
+            f"{result.years[0].utilization:.1f}%",
+
+        "+1 год":
+            f"{year_1.utilization:.1f}%",
+
+        "+2 года":
+            f"{year_2.utilization:.1f}%",
+
+        "+3 года":
+            f"{year_3.utilization:.1f}%",
+
+        "Станций сейчас":
+            result.years[0].stations,
+
+        "Станций +3 года":
+            year_3.stations,
+
+        "CAPEX":
+            f"{result.capex / 1_000_000:.1f} млн ₽",
+
+        "Сеть":
+            (
+            f"{result.grid_upgrade_cost / 1_000_000:.1f} млн ₽"
+            ),
+
+        "Всего инвестиций":
+            (
+            f"{result.total_investment / 1_000_000:.1f} млн ₽"
+            ),
+
+        "Payback":
+            (
+                "—"
+                if result.payback_years ==
+                    float("inf")
+                else
+                    f"{result.payback_years:.1f} лет"
+            ),
+
+        "Вердикт":
+            result.verdict
+    })
+
+
+df = pd.DataFrame(
+    table
+)
+
+
+st.dataframe(
+    df,
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# DETAILS
+# ============================================================
+
+st.header(
+    "Детализация площадок"
+)
+
+
+for result in results:
+
+    with st.expander(
+
+        f"{result.name} — "
+        f"{result.verdict} — "
+        f"Score {result.total_score:.1f}"
+
+    ):
+
+        col1, col2, col3, col4 = st.columns(4)
+
+
+        col1.metric(
+            "Score",
+            f"{result.total_score:.1f}/100"
+        )
+
+
+        col2.metric(
+            "CAPEX",
+            f"{result.capex / 1_000_000:.1f} млн ₽"
+        )
+
+
+        col3.metric(
+            "Payback",
+            (
+                "—"
+                if result.payback_years ==
+                    float("inf")
+                else
+                    f"{result.payback_years:.1f} лет"
+            )
+        )
+
+
+        col4.metric(
+            "OPEX / год",
+            f"{result.annual_opex / 1_000_000:.1f} млн ₽"
+        )
+
+        st.subheader("Инвестиции")
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric(
+            "Станции",
+            f"{result.capex / 1_000_000:.1f} млн ₽"
+        )  
+
+        col2.metric(
+            "Сеть",
+            f"{result.grid_upgrade_cost / 1_000_000:.1f} млн ₽"
+        )
+
+        col3.metric(
+            "Всего",
+            f"{result.total_investment / 1_000_000:.1f} млн ₽"
+        )
+
+        st.subheader(
+            "Прогноз на 3 года"
+        )
+
+
+        forecast_df = pd.DataFrame([
+
+            {
+
+                "Год":
+                    f"+{year.year}",
+
+                "Спрос":
+                    round(
+                        year.demand,
+                        1
+                    ),
+
+                "Станций":
+                    year.stations,
+
+                "Загрузка":
+                    f"{year.utilization:.1f}%",
+
+                "Эффективная мощность":
+                    f"{year.effective_power_kw:.0f} кВт",
+
+                "Резерв сети":
+                    f"{year.grid_reserve_kw:.0f} кВт"
+            }
+
+            for year in result.years
+
+        ])
+
+
+        st.dataframe(
+
+            forecast_df,
+
+            use_container_width=True,
+
+            hide_index=True
+        )
+
+
+        st.subheader(
+            "Состав Score"
+        )
+
+
+        score_df = pd.DataFrame([
+
+            {
+                "Критерий":
+                    "Спрос",
+
+                "Вес":
+                    "40%",
+
+                "Оценка":
+                    round(
+                        result.demand_score,
+                        1
+                    )
+            },
+
+            {
+                "Критерий":
+                    "Сеть",
+
+                "Вес":
+                    "25%",
+
+                "Оценка":
+                    round(
+                        result.grid_score,
+                        1
+                    )
+            },
+
+            {
+                "Критерий":
+                    "Экономика",
+
+                "Вес":
+                    "20%",
+
+                "Оценка":
+                    round(
+                        result.economics_score,
+                        1
+                    )
+            },
+
+            {
+                "Критерий":
+                    "Доступность",
+
+                "Вес":
+                    "15%",
+
+                "Оценка":
+                    round(
+                        result.accessibility_score,
+                        1
+                    )
+            }
+
+        ])
+
+
+        st.dataframe(
+
+            score_df,
+
+            use_container_width=True,
+
+            hide_index=True
+        )
+
+
+        if result.verdict == "BUILD":
+
+            st.success(
+                "🟢 BUILD — "
+                "площадка проходит условия модели."
+            )
+
+        elif result.verdict == "GRID UPGRADE":
+
+            st.warning(
+                "🟡 GRID UPGRADE — "
+                "перед строительством требуется "
+                "модернизация сети."
+            )
+
+        else:
+
+            st.error(
+                "🔴 DON'T BUILD — "
+                "площадка не проходит условия модели."
+            )
+
+
+# ============================================================
+# DISCLAIMER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Демонстрационный прототип. "
+    "Тепловая карта и параметры площадок "
+    "используют модельные данные. "
+    "CAPEX, OPEX, Payback, веса Score и пороги "
+    "BUILD являются проектными допущениями, "
+    "а не официальной методикой РСЗС."
+)
