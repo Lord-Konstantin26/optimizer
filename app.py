@@ -1,975 +1,555 @@
-import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pydeck as pdk
+import streamlit as st
 
-from optimizer import (
-    SiteInput,
-    optimize_site,
-    generate_candidates
-)
+from config import APP_TITLE, DEFAULTS
+from optimizer import SiteInput, generate_candidates, optimize_site
 
 
-# ============================================================
-# PAGE
-# ============================================================
+st.set_page_config(page_title=APP_TITLE, page_icon="⚡", layout="wide")
 
-st.set_page_config(
-    page_title="EV Charging Optimizer",
-    page_icon="⚡",
-    layout="wide"
-)
-
-
-st.title(
-    "⚡ Оптимизация размещения зарядных станций"
-)
-
-st.caption(
-    "Демонстрационный прототип пространственно-"
-    "экономической оптимизации зарядной инфраструктуры"
-)
+st.title("⚡ EV Charging Optimizer")
+st.caption("V3 · 2D-пространственная оптимизация размещения зарядной инфраструктуры")
 
 
 # ============================================================
 # SIDEBAR
 # ============================================================
+with st.sidebar:
+    st.header("Параметры модели")
 
-st.sidebar.header(
-    "Параметры модели"
-)
+    current_demand = st.number_input(
+        "Базовый спрос, ед./день",
+        min_value=1.0,
+        value=DEFAULTS["current_demand"],
+        step=10.0,
+    )
 
+    annual_growth = st.number_input(
+        "Годовой рост спроса, %",
+        min_value=0.0,
+        max_value=100.0,
+        value=DEFAULTS["annual_growth"],
+        step=5.0,
+    )
 
-current_demand = st.sidebar.number_input(
-    "Текущий спрос, ед./сутки",
-    min_value=1.0,
-    value=100.0
-)
+    fast_share = st.slider(
+        "Доля быстрой зарядки, %",
+        10.0, 100.0, DEFAULTS["fast_share"], 5.0
+    )
 
+    station_capacity = st.number_input(
+        "Пропускная способность станции, ед./день",
+        min_value=1.0,
+        value=DEFAULTS["station_capacity"],
+        step=10.0,
+    )
 
-annual_growth = st.sidebar.number_input(
-    "Рост спроса, % в год",
-    min_value=0.0,
-    max_value=100.0,
-    value=20.0
-)
+    station_power_kw = st.number_input(
+        "Мощность станции, кВт",
+        min_value=10.0,
+        value=DEFAULTS["station_power_kw"],
+        step=10.0,
+    )
 
+    simultaneity = st.slider(
+        "Коэффициент одновременности",
+        0.10, 1.00, DEFAULTS["simultaneity"], 0.05
+    )
 
-fast_share = st.sidebar.number_input(
-    "Доля быстрой зарядки, %",
-    min_value=0.0,
-    max_value=100.0,
-    value=60.0
-)
+    st.divider()
+    st.subheader("Экономика")
 
+    station_cost = st.number_input(
+        "Стоимость станции, ₽",
+        min_value=100_000.0,
+        value=DEFAULTS["station_cost"],
+        step=500_000.0,
+    )
 
-station_capacity = st.sidebar.number_input(
-    "Ёмкость станции, ед./сутки",
-    min_value=1.0,
-    value=100.0
-)
+    grid_upgrade_cost = st.number_input(
+        "Усиление сети на 100 кВт, ₽",
+        min_value=0.0,
+        value=DEFAULTS["grid_upgrade_cost_per_100kw"],
+        step=100_000.0,
+    )
 
+    annual_revenue = st.number_input(
+        "Выручка станции / год, ₽",
+        min_value=0.0,
+        value=DEFAULTS["annual_revenue_per_station"],
+        step=250_000.0,
+    )
 
-station_power = st.sidebar.number_input(
-    "Мощность станции, кВт",
-    min_value=1.0,
-    value=150.0
-)
+    annual_opex = st.number_input(
+        "OPEX станции / год, ₽",
+        min_value=0.0,
+        value=DEFAULTS["annual_opex_per_station"],
+        step=100_000.0,
+    )
 
+    st.divider()
 
-grid_power = st.sidebar.number_input(
-    "Доступная мощность сети, кВт",
-    min_value=0.0,
-    value=1000.0
-)
+    number_of_candidates = st.slider(
+        "Количество кандидатов",
+        6, 20, DEFAULTS["number_of_candidates"]
+    )
 
-
-simultaneity = st.sidebar.number_input(
-    "Коэффициент одновременности",
-    min_value=0.1,
-    max_value=1.0,
-    value=0.7,
-    step=0.05
-)
-
-
-station_cost = st.sidebar.number_input(
-    "Стоимость станции, ₽",
-    min_value=0.0,
-    value=5_000_000.0,
-    step=100_000.0
-)
-
-
-grid_upgrade_cost = st.sidebar.number_input(
-    "Модернизация сети / 100 кВт, ₽",
-    min_value=0.0,
-    value=1_000_000.0,
-    step=100_000.0
-)
-
-
-st.sidebar.divider()
-
-
-st.sidebar.header(
-    "Экономика"
-)
-
-
-annual_revenue = st.sidebar.number_input(
-    "Доход на станцию / год, ₽",
-    min_value=0.0,
-    value=3_000_000.0,
-    step=100_000.0
-)
-
-
-annual_opex = st.sidebar.number_input(
-    "OPEX на станцию / год, ₽",
-    min_value=0.0,
-    value=1_000_000.0,
-    step=100_000.0
-)
-
-
-number_of_candidates = st.sidebar.slider(
-    "Количество кандидатов",
-    min_value=5,
-    max_value=20,
-    value=10
-)
+    st.caption(
+        "Спрос, подстанции и экономика являются демонстрационными данными."
+    )
 
 
 # ============================================================
-# HEATMAP DATA
+# SPATIAL DATA
 # ============================================================
+MAP_BOUNDS = {
+    "lat_min": 55.55,
+    "lat_max": 55.90,
+    "lon_min": 37.35,
+    "lon_max": 37.85,
+}
 
 demand_centers = [
-
-    {
-        "lat": 55.7558,
-        "lon": 37.6176,
-        "intensity": 1.00,
-        "radius": 0.015
-    },
-
-    {
-        "lat": 55.7415,
-        "lon": 37.6260,
-        "intensity": 0.75,
-        "radius": 0.012
-    },
-
-    {
-        "lat": 55.7690,
-        "lon": 37.5950,
-        "intensity": 1.25,
-        "radius": 0.018
-    }
+    {"lat": 55.885, "lon": 37.475, "intensity": 0.38, "radius": 0.025},
+    {"lat": 55.855, "lon": 37.570, "intensity": 0.55, "radius": 0.022},
+    {"lat": 55.820, "lon": 37.690, "intensity": 0.48, "radius": 0.024},
+    {"lat": 55.790, "lon": 37.445, "intensity": 0.44, "radius": 0.025},
+    {"lat": 55.7558, "lon": 37.6176, "intensity": 1.00, "radius": 0.022},
+    {"lat": 55.742, "lon": 37.690, "intensity": 0.68, "radius": 0.020},
+    {"lat": 55.715, "lon": 37.545, "intensity": 0.58, "radius": 0.024},
+    {"lat": 55.690, "lon": 37.690, "intensity": 0.50, "radius": 0.026},
+    {"lat": 55.650, "lon": 37.575, "intensity": 0.42, "radius": 0.025},
+    {"lat": 55.625, "lon": 37.735, "intensity": 0.36, "radius": 0.024},
+    {"lat": 55.835, "lon": 37.390, "intensity": 0.30, "radius": 0.025},
+    {"lat": 55.585, "lon": 37.425, "intensity": 0.28, "radius": 0.025},
 ]
-
-# ============================================================
-# DEMO GRID / SUBSTATIONS
-# ============================================================
 
 substations = [
-    {
-        "name": "ПС-01",
-        "lat": 55.7558,
-        "lon": 37.6176,
-        "capacity_kw": 1200,
-    },
-    {
-        "name": "ПС-02",
-        "lat": 55.7415,
-        "lon": 37.6260,
-        "capacity_kw": 500,
-    },
-    {
-        "name": "ПС-03",
-        "lat": 55.7690,
-        "lon": 37.5950,
-        "capacity_kw": 800,
-    },
-    {
-        "name": "ПС-04",
-        "lat": 55.7800,
-        "lon": 37.6500,
-        "capacity_kw": 600,
-    },
-    {
-        "name": "ПС-05",
-        "lat": 55.7200,
-        "lon": 37.5900,
-        "capacity_kw": 1000,
-    },
+    {"name": "ПС-Север", "lat": 55.875, "lon": 37.500, "capacity_kw": 300},
+    {"name": "ПС-Север-2", "lat": 55.830, "lon": 37.625, "capacity_kw": 1200},
+    {"name": "ПС-Центр", "lat": 55.7558, "lon": 37.6176, "capacity_kw": 250},
+    {"name": "ПС-Восток", "lat": 55.790, "lon": 37.730, "capacity_kw": 600},
+    {"name": "ПС-СЗ", "lat": 55.790, "lon": 37.440, "capacity_kw": 750},
+    {"name": "ПС-ЮЗ", "lat": 55.700, "lon": 37.520, "capacity_kw": 300},
+    {"name": "ПС-Юг", "lat": 55.650, "lon": 37.650, "capacity_kw": 1000},
+    {"name": "ПС-ЮВ", "lat": 55.690, "lon": 37.760, "capacity_kw": 350},
+    {"name": "ПС-Запад", "lat": 55.830, "lon": 37.390, "capacity_kw": 700},
 ]
 
-lat_values = np.linspace(
-    55.69,
-    55.82,
-    70
-)
 
+def make_heatmap():
+    lats = np.linspace(MAP_BOUNDS["lat_min"], MAP_BOUNDS["lat_max"], 115)
+    lons = np.linspace(MAP_BOUNDS["lon_min"], MAP_BOUNDS["lon_max"], 145)
 
-lon_values = np.linspace(
-    37.52,
-    37.72,
-    90
-)
+    rows = []
 
+    for lat in lats:
+        for lon in lons:
+            intensity = 0.015
 
-heatmap_points = []
-
-
-for lat in lat_values:
-
-    for lon in lon_values:
-
-        demand = 0.0
-
-        for center in demand_centers:
-
-            distance = (
-                (lat - center["lat"]) ** 2
-                +
-                (lon - center["lon"]) ** 2
-            )
-
-            influence = np.exp(
-                -distance /
-                (
-                    center["radius"] ** 2
+            for center in demand_centers:
+                d2 = (lat - center["lat"]) ** 2 + (lon - center["lon"]) ** 2
+                intensity += center["intensity"] * np.exp(
+                    -d2 / (2 * center["radius"] ** 2)
                 )
-            )
 
-            demand += (
-                influence *
-                center["intensity"]
-            )
+            rows.append({
+                "lat": lat,
+                "lon": lon,
+                "intensity": intensity,
+            })
 
-        heatmap_points.append({
+    df = pd.DataFrame(rows)
 
-            "lat": lat,
+    low = df["intensity"].quantile(0.02)
+    high = df["intensity"].quantile(0.98)
 
-            "lon": lon,
+    df["intensity"] = (
+        (df["intensity"] - low) / max(high - low, 1e-9)
+    ).clip(0, 1)
 
-            "demand": demand
-
-        })
+    return df
 
 
-heatmap_df = pd.DataFrame(
-    heatmap_points
-)
-
-def find_nearest_substation(
-    lat,
-    lon,
-    substations
-):
-
+def find_nearest_substation(lat, lon, subs):
     nearest = None
     min_distance = float("inf")
 
-    for substation in substations:
-
-        distance = (
-            (lat - substation["lat"]) ** 2
-            +
-            (lon - substation["lon"]) ** 2
-        ) ** 0.5
+    for sub in subs:
+        distance = ((lat - sub["lat"]) ** 2 + (lon - sub["lon"]) ** 2) ** 0.5
 
         if distance < min_distance:
-
             min_distance = distance
-            nearest = substation
+            nearest = sub
 
     return nearest, min_distance
 
-# ============================================================
-# AUTOMATIC CANDIDATES
-# ============================================================
 
-candidate_points = generate_candidates(
-
-    heatmap_df,
-
-    n_candidates=
-        number_of_candidates,
-
-    min_distance=0.008
-)
+def nearest_heatmap_intensity(lat, lon, heatmap):
+    distance_sq = (
+        (heatmap["lat"] - lat) ** 2
+        + (heatmap["lon"] - lon) ** 2
+    )
+    idx = distance_sq.idxmin()
+    return float(heatmap.loc[idx, "intensity"])
 
 
-max_demand = max(
-    point["demand"]
-    for point in candidate_points
-)
+def make_sites():
+    heatmap_df = make_heatmap()
 
-
-sites_data = []
-
-for i, point in enumerate(candidate_points):
-
-    demand_multiplier = (
-        point["demand"] / max_demand
+    candidate_points = generate_candidates(
+        heatmap_df,
+        n_candidates=number_of_candidates,
+        min_distance=0.012,
     )
 
-    accessibility = (
-        60 +
-        40 * demand_multiplier
-    )
+    sites = []
 
-    nearest_substation, distance = (
-        find_nearest_substation(
-            point["lat"],
-            point["lon"],
-            substations
+    for i, point in enumerate(candidate_points):
+        nearest, distance = find_nearest_substation(
+            point["lat"], point["lon"], substations
         )
-    )
 
-    sites_data.append({
-
-        "name":
-            f"Кандидат {i + 1}",
-
-        "lat":
+        intensity = nearest_heatmap_intensity(
             point["lat"],
-
-        "lon":
             point["lon"],
+            heatmap_df,
+        )
 
-        "demand_multiplier":
-            demand_multiplier,
+        demand_multiplier = 0.45 + intensity * 1.55
 
-        "accessibility":
-            accessibility,
+        accessibility = max(
+            55.0,
+            min(100.0, 100.0 - distance * 1800),
+        )
 
-        "substation":
-            nearest_substation["name"],
+        sites.append({
+            "name": f"Кандидат {i + 1}",
+            "lat": point["lat"],
+            "lon": point["lon"],
+            "demand_multiplier": demand_multiplier,
+            "demand_intensity": intensity,
+            "accessibility": accessibility,
+            "substation": nearest["name"],
+            "grid_capacity": nearest["capacity_kw"],
+            "substation_distance": distance,
+        })
 
-        "grid_capacity":
-            nearest_substation["capacity_kw"],
-
-        "substation_distance":
-            distance
-    })
-
-
-# ============================================================
-# OPTIMIZATION
-# ============================================================
-
-results = []
-
-
-for site_data in sites_data:
-
-    site_demand = (
-        current_demand *
-        site_data["demand_multiplier"]
-    )
+    return heatmap_df, pd.DataFrame(sites)
 
 
-    site = SiteInput(
-
-        name=
-            site_data["name"],
-
-        current_demand=
-            site_demand,
-
-        annual_growth=
-            annual_growth,
-
-        fast_share=
-            fast_share,
-
-        station_capacity=
-            station_capacity,
-
-        station_power_kw=
-            station_power,
-
-        station_cost=
-            station_cost,
-
-        grid_power_kw=
-            site_data["grid_capacity"],
-
-        simultaneity=
-            simultaneity,
-
-        grid_upgrade_cost_per_100kw=
-            grid_upgrade_cost,
-
-        annual_revenue_per_station=
-            annual_revenue,
-
-        annual_opex_per_station=
-            annual_opex,
-
-        accessibility_score=
-            site_data["accessibility"]
-    )
-
-
-    result = optimize_site(
-        site
-    )
-
-
-    results.append(
-        result
-    )
+heatmap_df, sites_df = make_sites()
 
 
 # ============================================================
-# KPI
+# MODEL
 # ============================================================
+def calculate_results(growth_override=None, fast_share_override=None):
+    growth = annual_growth if growth_override is None else growth_override
+    fast = fast_share if fast_share_override is None else fast_share_override
 
-st.header(
-    "Результат оптимизации"
-)
+    results = []
 
+    for _, site_data in sites_df.iterrows():
+        adjusted_demand = current_demand * site_data["demand_multiplier"]
 
-col1, col2, col3, col4 = st.columns(4)
+        site = SiteInput(
+            name=site_data["name"],
+            current_demand=adjusted_demand,
+            annual_growth=growth,
+            fast_share=fast,
+            station_capacity=station_capacity,
+            station_power_kw=station_power_kw,
+            station_cost=station_cost,
+            grid_power_kw=site_data["grid_capacity"],
+            simultaneity=simultaneity,
+            grid_upgrade_cost_per_100kw=grid_upgrade_cost,
+            annual_revenue_per_station=annual_revenue,
+            annual_opex_per_station=annual_opex,
+            accessibility_score=site_data["accessibility"],
+        )
 
+        results.append(optimize_site(site, horizon=3))
 
-col1.metric(
-    "Кандидатов",
-    len(results)
-)
-
-
-col2.metric(
-    "BUILD",
-    sum(
-        r.verdict == "BUILD"
-        for r in results
-    )
-)
-
-
-col3.metric(
-    "Средний Score",
-    f"{sum(r.total_score for r in results) / len(results):.1f}"
-)
-
-
-valid_paybacks = [
-    r.payback_years
-    for r in results
-    if r.payback_years != float("inf")
-]
+    return results
 
 
-if valid_paybacks:
-
-    average_payback = (
-        sum(valid_paybacks) /
-        len(valid_paybacks)
-    )
-
-else:
-
-    average_payback = 0
-
-
-col4.metric(
-    "Средний Payback",
-    f"{average_payback:.1f} лет"
-)
+results = calculate_results()
 
 
 # ============================================================
-# HEATMAP + CANDIDATES
+# HEADER
 # ============================================================
+build_count = sum(r.verdict == "BUILD" for r in results)
+upgrade_count = sum(r.verdict == "GRID UPGRADE" for r in results)
+dont_build_count = sum(r.verdict == "DON'T BUILD" for r in results)
+avg_score = np.mean([r.total_score for r in results]) if results else 0
 
-st.header(
-    "🔥 Тепловая карта транспортного спроса"
+m1, m2, m3, m4, m5 = st.columns(5)
+
+m1.metric("Кандидатов", len(results))
+m2.metric("BUILD", build_count)
+m3.metric("GRID UPGRADE", upgrade_count)
+m4.metric("DON'T BUILD", dont_build_count)
+m5.metric("Средний score", f"{avg_score:.1f}")
+
+
+# ============================================================
+# MAP
+# ============================================================
+st.subheader("1. Карта спроса и кандидатов")
+st.caption(
+    "2D-режим. Синий/зелёный — низкий и средний спрос; "
+    "жёлтый/оранжевый/красный — высокий."
 )
 
+candidate_map_df = sites_df.copy()
 
-candidate_map_data = []
-
-
-for site_data, result in zip(
-    sites_data,
-    results
-):
-
-    candidate_map_data.append({
-
-        "lat":
-            site_data["lat"],
-
-        "lon":
-            site_data["lon"],
-
-        "name":
-            result.name,
-
-        "score":
-            round(
-                result.total_score,
-                1
-            ),
-
-        "verdict":
-            result.verdict,
-
-        "grid_capacity":
-            site_data["grid_capacity"],
-
-        "substation":
-            site_data["substation"]
-    })
-
-
-candidate_df = pd.DataFrame(
-    candidate_map_data
-)
-
-
-# Heatmap
-heatmap_layer = pdk.Layer(
-
-    "HeatmapLayer",
-
-    data=heatmap_df,
-
-    get_position=
-        "[lon, lat]",
-
-    get_weight=
-        "demand",
-
-    radius_pixels=45,
-
-    intensity=1.5,
-
-    threshold=0.03
-)
-
-
-# Candidate points
 candidate_layer = pdk.Layer(
-
     "ScatterplotLayer",
-
-    data=candidate_df,
-
-    get_position=
-        "[lon, lat]",
-
-    get_radius=450,
-
-    get_fill_color=
-        "[255, 255, 255, 255]",
-
-    get_line_color=
-        "[0, 0, 0, 255]",
-
-    line_width_min_pixels=2,
-
-    pickable=True
-)
-
-substation_df = pd.DataFrame(
-    substations
-)
-
-substation_layer = pdk.Layer(
-
-    "ScatterplotLayer",
-
-    data=substation_df,
-
+    data=candidate_map_df,
     get_position="[lon, lat]",
-
-    get_radius=300,
-
-    get_fill_color=
-        "[50, 150, 255, 220]",
-
-    get_line_color=
-        "[255, 255, 255, 255]",
-
+    get_radius=420,
+    radius_min_pixels=4,
+    radius_max_pixels=18,
+    get_fill_color=[255, 255, 255, 245],
+    get_line_color=[15, 15, 15, 255],
     line_width_min_pixels=2,
-
-    pickable=True
+    pickable=True,
 )
 
-view_state = pdk.ViewState(
-
-    latitude=55.7558,
-
-    longitude=37.6176,
-
-    zoom=10.5,
-
-    pitch=0
-)
-
-
-deck = pdk.Deck(
-
-    layers=[
-        heatmap_layer,
-        candidate_layer,
-        substation_layer
+heat_layer = pdk.Layer(
+    "HeatmapLayer",
+    data=heatmap_df,
+    get_position="[lon, lat]",
+    get_weight="intensity",
+    radius_pixels=30,
+    intensity=1.0,
+    threshold=0.035,
+    color_range=[
+        [30, 80, 180],
+        [40, 150, 190],
+        [70, 190, 120],
+        [240, 220, 70],
+        [245, 145, 45],
+        [220, 45, 35],
     ],
-
-    initial_view_state=
-        view_state,
-
-    tooltip={
-
-        "html": """
-        <b>{name}</b><br/>
-        Score: {score}<br/>
-        Статус: {verdict}
-        """
-    }
 )
 
+sub_df = pd.DataFrame(substations)
+
+sub_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=sub_df,
+    get_position="[lon, lat]",
+    get_radius=280,
+    radius_min_pixels=3,
+    radius_max_pixels=12,
+    get_fill_color=[30, 120, 255, 235],
+    get_line_color=[255, 255, 255, 255],
+    line_width_min_pixels=1,
+    pickable=True,
+)
+
+map_view = pdk.ViewState(
+    latitude=55.735,
+    longitude=37.60,
+    zoom=9.3,
+    pitch=0,
+    bearing=0,
+)
 
 st.pydeck_chart(
-    deck,
-    use_container_width=True
+    pdk.Deck(
+        layers=[heat_layer, candidate_layer, sub_layer],
+        initial_view_state=map_view,
+        tooltip={
+            "html": "<b>{name}</b><br/>Мощность ПС: {capacity_kw} кВт",
+            "style": {
+                "backgroundColor": "#1f2937",
+                "color": "white",
+            },
+        },
+    ),
+    use_container_width=True,
 )
 
-
-st.caption(
-    "🔥 Тепловой слой показывает модельный "
-    "уровень спроса. Белые точки — автоматически "
-    "найденные кандидатные площадки."
-)
+l1, l2, l3, l4 = st.columns(4)
+l1.markdown("🔵 **Низкий спрос**")
+l2.markdown("🟢 **Средний спрос**")
+l3.markdown("🟠 **Высокий спрос**")
+l4.markdown("🔴 **Пиковый спрос**")
 
 
 # ============================================================
-# TABLE
+# CANDIDATE COMPARISON
 # ============================================================
+st.subheader("2. Сравнение кандидатов")
 
-st.header(
-    "Кандидатные площадки"
-)
+table_rows = []
 
+for _, site_data in sites_df.iterrows():
+    result = next(r for r in results if r.name == site_data["name"])
 
-table = []
-
-for site_data, result in zip(
-    sites_data,
-    results
-):
-
-    year_1 = result.years[1]
-    year_2 = result.years[2]
-    year_3 = result.years[3]
-
-    table.append({
-
-        "Площадка":
-            result.name,
-
-        "Подстанция":
-            site_data["substation"],
-
-        "Сеть":
-            f"{site_data['grid_capacity']:.0f} кВт",
-
-        "Score":
-            round(
-                result.total_score,
-                1
-            ),
-
-        "Сейчас":
-            f"{result.years[0].utilization:.1f}%",
-
-        "+1 год":
-            f"{year_1.utilization:.1f}%",
-
-        "+2 года":
-            f"{year_2.utilization:.1f}%",
-
-        "+3 года":
-            f"{year_3.utilization:.1f}%",
-
-        "Станций сейчас":
-            result.years[0].stations,
-
-        "Станций +3 года":
-            year_3.stations,
-
-        "CAPEX":
-            f"{result.capex / 1_000_000:.1f} млн ₽",
-
-        "Сеть":
-            (
-            f"{result.grid_upgrade_cost / 1_000_000:.1f} млн ₽"
-            ),
-
-        "Всего инвестиций":
-            (
-            f"{result.total_investment / 1_000_000:.1f} млн ₽"
-            ),
-
-        "Payback":
-            (
-                "—"
-                if result.payback_years ==
-                    float("inf")
-                else
-                    f"{result.payback_years:.1f} лет"
-            ),
-
-        "Вердикт":
-            result.verdict
+    table_rows.append({
+        "Кандидат": result.name,
+        "Спрос ×": round(site_data["demand_multiplier"], 2),
+        "Подстанция": site_data["substation"],
+        "Сеть, кВт": int(site_data["grid_capacity"]),
+        "Score": round(result.total_score, 1),
+        "Станций, год 0": result.years[0].stations,
+        "Станций, год 3": result.years[3].stations,
+        "Util. год 1": f"{result.years[1].utilization:.1f}%",
+        "Util. год 3": f"{result.years[3].utilization:.1f}%",
+        "CAPEX": result.capex,
+        "Усиление сети": result.grid_upgrade_cost,
+        "Инвестиции": result.total_investment,
+        "Окупаемость": (
+            None
+            if np.isinf(result.payback_years)
+            else round(result.payback_years, 2)
+        ),
+        "Решение": result.verdict,
     })
 
-
-df = pd.DataFrame(
-    table
-)
-
+table_df = pd.DataFrame(table_rows)
 
 st.dataframe(
-    df,
+    table_df,
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
 )
 
 
 # ============================================================
 # DETAILS
 # ============================================================
+st.subheader("3. Детальный анализ")
 
-st.header(
-    "Детализация площадок"
+for result in sorted(results, key=lambda x: x.total_score, reverse=True):
+    with st.expander(
+        f"{result.name} — {result.verdict} — score {result.total_score:.1f}"
+    ):
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric("Demand score", f"{result.demand_score:.1f}")
+        c2.metric("Grid score", f"{result.grid_score:.1f}")
+        c3.metric("Economics score", f"{result.economics_score:.1f}")
+        c4.metric("Accessibility", f"{result.accessibility_score:.1f}")
+
+        forecast = pd.DataFrame([
+            {
+                "Год": year.year,
+                "Спрос": round(year.demand, 1),
+                "Станций": year.stations,
+                "Utilization": f"{year.utilization:.1f}%",
+                "Эфф. мощность, кВт": round(year.effective_power_kw, 1),
+                "Резерв сети, кВт": round(year.grid_reserve_kw, 1),
+            }
+            for year in result.years
+        ])
+
+        st.dataframe(
+            forecast,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        a, b, c, d = st.columns(4)
+
+        a.metric("CAPEX", f"{result.capex:,.0f} ₽")
+        b.metric("Усиление сети", f"{result.grid_upgrade_cost:,.0f} ₽")
+        c.metric("Всего инвестиций", f"{result.total_investment:,.0f} ₽")
+        d.metric(
+            "Payback",
+            "∞"
+            if np.isinf(result.payback_years)
+            else f"{result.payback_years:.2f} лет",
+        )
+
+        if result.grid_upgrade_required:
+            st.warning(
+                f"В горизонте 0–3 лет выявлен дефицит "
+                f"{result.grid_deficit_kw:.0f} кВт. "
+                f"Усиление требуется к году {result.grid_upgrade_year}."
+            )
+        else:
+            st.success("Дефицит мощности в горизонте 0–3 лет не выявлен.")
+
+
+# ============================================================
+# SCENARIOS
+# ============================================================
+st.subheader("4. Сценарный анализ")
+
+scenarios = [
+    ("Базовый", annual_growth, fast_share),
+    ("Высокий рост", annual_growth + 15, fast_share),
+    ("Высокая доля быстрой зарядки", annual_growth, min(100, fast_share + 20)),
+    ("Стресс", annual_growth + 25, min(100, fast_share + 20)),
+]
+
+scenario_rows = []
+
+for scenario_name, growth_s, fast_s in scenarios:
+    scenario_results = calculate_results(
+        growth_override=growth_s,
+        fast_share_override=fast_s,
+    )
+
+    paybacks = [
+        r.payback_years
+        for r in scenario_results
+        if not np.isinf(r.payback_years)
+    ]
+
+    scenario_rows.append({
+        "Сценарий": scenario_name,
+        "Рост спроса": f"{growth_s:.0f}%",
+        "Fast charge": f"{fast_s:.0f}%",
+        "Макс. score": round(
+            max(r.total_score for r in scenario_results), 1
+        ),
+        "Средняя окупаемость": (
+            round(float(np.mean(paybacks)), 2)
+            if paybacks else None
+        ),
+        "GRID UPGRADE": sum(
+            r.verdict == "GRID UPGRADE"
+            for r in scenario_results
+        ),
+        "DON'T BUILD": sum(
+            r.verdict == "DON'T BUILD"
+            for r in scenario_results
+        ),
+    })
+
+scenario_df = pd.DataFrame(scenario_rows)
+
+st.dataframe(
+    scenario_df,
+    use_container_width=True,
+    hide_index=True,
 )
 
 
-for result in results:
-
-    with st.expander(
-
-        f"{result.name} — "
-        f"{result.verdict} — "
-        f"Score {result.total_score:.1f}"
-
-    ):
-
-        col1, col2, col3, col4 = st.columns(4)
-
-
-        col1.metric(
-            "Score",
-            f"{result.total_score:.1f}/100"
-        )
-
-
-        col2.metric(
-            "CAPEX",
-            f"{result.capex / 1_000_000:.1f} млн ₽"
-        )
-
-
-        col3.metric(
-            "Payback",
-            (
-                "—"
-                if result.payback_years ==
-                    float("inf")
-                else
-                    f"{result.payback_years:.1f} лет"
-            )
-        )
-
-
-        col4.metric(
-            "OPEX / год",
-            f"{result.annual_opex / 1_000_000:.1f} млн ₽"
-        )
-
-        st.subheader("Инвестиции")
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric(
-            "Станции",
-            f"{result.capex / 1_000_000:.1f} млн ₽"
-        )  
-
-        col2.metric(
-            "Сеть",
-            f"{result.grid_upgrade_cost / 1_000_000:.1f} млн ₽"
-        )
-
-        col3.metric(
-            "Всего",
-            f"{result.total_investment / 1_000_000:.1f} млн ₽"
-        )
-
-        st.subheader(
-            "Прогноз на 3 года"
-        )
-
-
-        forecast_df = pd.DataFrame([
-
-            {
-
-                "Год":
-                    f"+{year.year}",
-
-                "Спрос":
-                    round(
-                        year.demand,
-                        1
-                    ),
-
-                "Станций":
-                    year.stations,
-
-                "Загрузка":
-                    f"{year.utilization:.1f}%",
-
-                "Эффективная мощность":
-                    f"{year.effective_power_kw:.0f} кВт",
-
-                "Резерв сети":
-                    f"{year.grid_reserve_kw:.0f} кВт"
-            }
-
-            for year in result.years
-
-        ])
-
-
-        st.dataframe(
-
-            forecast_df,
-
-            use_container_width=True,
-
-            hide_index=True
-        )
-
-
-        st.subheader(
-            "Состав Score"
-        )
-
-
-        score_df = pd.DataFrame([
-
-            {
-                "Критерий":
-                    "Спрос",
-
-                "Вес":
-                    "40%",
-
-                "Оценка":
-                    round(
-                        result.demand_score,
-                        1
-                    )
-            },
-
-            {
-                "Критерий":
-                    "Сеть",
-
-                "Вес":
-                    "25%",
-
-                "Оценка":
-                    round(
-                        result.grid_score,
-                        1
-                    )
-            },
-
-            {
-                "Критерий":
-                    "Экономика",
-
-                "Вес":
-                    "20%",
-
-                "Оценка":
-                    round(
-                        result.economics_score,
-                        1
-                    )
-            },
-
-            {
-                "Критерий":
-                    "Доступность",
-
-                "Вес":
-                    "15%",
-
-                "Оценка":
-                    round(
-                        result.accessibility_score,
-                        1
-                    )
-            }
-
-        ])
-
-
-        st.dataframe(
-
-            score_df,
-
-            use_container_width=True,
-
-            hide_index=True
-        )
-
-
-        if result.verdict == "BUILD":
-
-            st.success(
-                "🟢 BUILD — "
-                "площадка проходит условия модели."
-            )
-
-        elif result.verdict == "GRID UPGRADE":
-
-            st.warning(
-                "🟡 GRID UPGRADE — "
-                "перед строительством требуется "
-                "модернизация сети."
-            )
-
-        else:
-
-            st.error(
-                "🔴 DON'T BUILD — "
-                "площадка не проходит условия модели."
-            )
-
-
 # ============================================================
-# DISCLAIMER
+# EXPORT
 # ============================================================
+st.subheader("5. Экспорт")
 
-st.divider()
+csv_bytes = table_df.to_csv(index=False).encode("utf-8-sig")
+
+st.download_button(
+    "⬇ Скачать результаты CSV",
+    data=csv_bytes,
+    file_name="ev_optimizer_v3_results.csv",
+    mime="text/csv",
+)
 
 st.caption(
-    "Демонстрационный прототип. "
-    "Тепловая карта и параметры площадок "
-    "используют модельные данные. "
-    "CAPEX, OPEX, Payback, веса Score и пороги "
-    "BUILD являются проектными допущениями, "
-    "а не официальной методикой РСЗС."
+    "V3 — демонстрационный прототип. Параметры, веса score и пороги "
+    "решений являются проектными допущениями."
 )
