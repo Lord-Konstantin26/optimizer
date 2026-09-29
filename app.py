@@ -229,20 +229,29 @@ def nearest_heatmap_row(lat, lon, heatmap):
 
 
 def make_sites(heatmap_df):
+    # Candidate geometry is selected only from the fixed baseline scenario.
+    # Current map year and interactive parameters update site metrics below,
+    # but must never move the candidate coordinates.
+    candidate_base = make_heatmap(
+        DEFAULTS["current_demand"],
+        DEFAULTS["annual_growth"],
+        DEFAULTS["fast_share"],
+        0,
+    )
     candidates = generate_candidates(
-        heatmap_df,
+        candidate_base,
         n_candidates=number_of_candidates,
         min_distance=0.014,
         existing_stations=existing_stations,
         substations=substations,
-        fast_share=fast_share,
-        station_capacity=station_capacity,
-        station_power_kw=station_power_kw,
-        simultaneity=simultaneity,
-        station_cost=station_cost,
-        annual_revenue_per_station=annual_revenue,
-        annual_opex_per_station=annual_opex,
-        grid_upgrade_cost_per_100kw=grid_upgrade_cost,
+        fast_share=DEFAULTS["fast_share"],
+        station_capacity=DEFAULTS["station_capacity"],
+        station_power_kw=DEFAULTS["station_power_kw"],
+        simultaneity=DEFAULTS["simultaneity"],
+        station_cost=DEFAULTS["station_cost"],
+        annual_revenue_per_station=DEFAULTS["annual_revenue_per_station"],
+        annual_opex_per_station=DEFAULTS["annual_opex_per_station"],
+        grid_upgrade_cost_per_100kw=DEFAULTS["grid_upgrade_cost_per_100kw"],
     )
 
     sites = []
@@ -276,7 +285,8 @@ def make_sites(heatmap_df):
                 "substation": nearest["name"],
                 "grid_capacity": nearest["capacity_kw"],
                 "substation_distance": distance,
-                "demand_score_proxy": point.get("demand_score_proxy", 0.0),
+                # Demand score follows the selected year's/current parameter map.
+                "demand_score_proxy": float(hrow["demand_score_proxy"]),
                 "coverage_gap_score": point.get("coverage_gap_score", 0.0),
                 "grid_score_proxy": point.get("grid_score_proxy", 0.0),
                 "economics_score_proxy": point.get("economics_score_proxy", 0.0),
