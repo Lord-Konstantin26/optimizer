@@ -9,4 +9,32 @@
 Проверить установку:
 
 ```bash
-python --version
+py --version
+```
+
+## 2. Открыть папку с проектом
+
+```bash
+cd charge_optimizer
+```
+
+## 3. Создать виртуальное окружение
+
+```bash
+python -m venv venv
+```
+```bash
+venv\Scripts\activate
+```
+
+## 4. Установить библиотеки
+
+```bash
+pip install -r requirements.txt
+```
+
+## 5. Запустить приложение
+
+```bash 
+streamlit run app.py
+```
